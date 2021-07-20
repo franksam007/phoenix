@@ -140,13 +140,13 @@ function personality_modules
 
   # Running with threads>1 seems to trigger some problem in the build, but since we
   # spend 80+% of the time in phoenix-core, it wouldn't help much anyway
-  extra="--threads=1 -DPhoenixPatchProcess -Dskip.embedded"
+  extra="--threads=1 -DPhoenixPatchProcess"
   if [[ "${PATCH_BRANCH}" = 4* ]]; then
     extra="${extra} -Dhttps.protocols=TLSv1.2"
   fi
 
   # If we have HBASE_PROFILE specified pass along
-  # the hadoop.profile system property.
+  # the hbase.profile system property.
   if [[ -n "${HBASE_PROFILE}" ]] ; then
     extra="${extra} -Dhbase.profile=${HBASE_PROFILE}"
   fi
@@ -294,6 +294,37 @@ function get_include_exclude_tests_arg
              "${FLAKY_URL}. Ignoring and proceeding."
       fi
   fi
+}
+
+######################################
+
+add_test_type hbaserebuild
+
+## @description  hbaserebuild file filter
+## @audience     private
+## @stability    evolving
+## @param        filename
+function hbaserebuild_filefilter
+{
+  local filename=$1
+
+  if [[ ${filename} =~ \.java$ ]]; then
+    add_test hbaserebuild
+  fi
+}
+
+## @description  hbaserebuild precheck
+## @audience     private
+## @stability    evolving
+## @param        none
+function hbaserebuild_precompile
+{
+  big_console_header "Reinstalling HBase with Hadoop 3"
+
+  MAVEN_LOCAL_REPO="$MAVEN_LOCAL_REPO" ${BASEDIR}/dev/rebuild_hbase.sh detect
+
+  add_vote_table +0 hbaserecompile "" "HBase recompiled."
+  return 0
 }
 
 ######################################

@@ -42,6 +42,7 @@ import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.phoenix.jdbc.PhoenixConnection;
 import org.apache.phoenix.mapreduce.FormatToBytesWritableMapper;
 import org.apache.phoenix.mapreduce.ImportPreUpsertKeyValueProcessor;
+import org.apache.phoenix.mapreduce.index.IndexScrutinyTool;
 import org.apache.phoenix.mapreduce.index.IndexScrutinyTool.OutputFormat;
 import org.apache.phoenix.mapreduce.index.IndexScrutinyTool.SourceTable;
 import org.apache.phoenix.mapreduce.index.IndexTool;
@@ -126,6 +127,8 @@ public final class PhoenixConfigurationUtil {
 
     public static final String INDEX_TOOL_INDEX_TABLE_NAME = "phoenix.mr.index_tool.index.table.name";
 
+    public static final String INDEX_TOOL_SOURCE_TABLE = "phoenix.mr.index_tool.source.table";
+
     public static final String SCRUTINY_SOURCE_TABLE = "phoenix.mr.scrutiny.source.table";
 
     public static final String SCRUTINY_BATCH_SIZE = "phoenix.mr.scrutiny.batch.size";
@@ -190,6 +193,13 @@ public final class PhoenixConfigurationUtil {
 
     // provide an absolute path to inject your multi input mapper logic
     public static final String MAPREDUCE_MULTI_INPUT_MAPPER_TRACKER_CLAZZ = "phoenix.mapreduce.multi.mapper.tracker.path";
+
+    // provide control to whether or not handle mapreduce snapshot restore and cleanup operations which
+    // is used by scanners on phoenix side internally or handled by caller externally
+    public static final String MAPREDUCE_EXTERNAL_SNAPSHOT_RESTORE = "phoenix.mapreduce.external.snapshot.restore";
+
+    // by default MR snapshot restore is handled internally by phoenix
+    public static final boolean DEFAULT_MAPREDUCE_EXTERNAL_SNAPSHOT_RESTORE = false;
 
     /**
      * Determines type of Phoenix Map Reduce job.
@@ -718,6 +728,19 @@ public final class PhoenixConfigurationUtil {
         return configuration.get(INDEX_TOOL_INDEX_TABLE_NAME);
     }
 
+    public static void setIndexToolSourceTable(Configuration configuration,
+            IndexScrutinyTool.SourceTable sourceTable) {
+        Preconditions.checkNotNull(configuration);
+        Preconditions.checkNotNull(sourceTable);
+        configuration.set(INDEX_TOOL_SOURCE_TABLE, sourceTable.name());
+    }
+
+    public static IndexScrutinyTool.SourceTable getIndexToolSourceTable(Configuration configuration) {
+        Preconditions.checkNotNull(configuration);
+        return IndexScrutinyTool.SourceTable.valueOf(configuration.get(INDEX_TOOL_SOURCE_TABLE,
+            IndexScrutinyTool.SourceTable.DATA_TABLE_SOURCE.name()));
+    }
+
     public static void setScrutinySourceTable(Configuration configuration,
             SourceTable sourceTable) {
         Preconditions.checkNotNull(configuration);
@@ -864,6 +887,19 @@ public final class PhoenixConfigurationUtil {
     public static void setTenantId(Configuration configuration, String tenantId){
         Preconditions.checkNotNull(configuration);
         configuration.set(MAPREDUCE_TENANT_ID, tenantId);
+    }
+
+    public static void setMRSnapshotManagedExternally(Configuration configuration, Boolean isSnapshotRestoreManagedExternally) {
+        Preconditions.checkNotNull(configuration);
+        Preconditions.checkNotNull(isSnapshotRestoreManagedExternally);
+        configuration.setBoolean(MAPREDUCE_EXTERNAL_SNAPSHOT_RESTORE, isSnapshotRestoreManagedExternally);
+    }
+
+    public static boolean isMRSnapshotManagedExternally(final Configuration configuration) {
+        Preconditions.checkNotNull(configuration);
+        boolean isSnapshotRestoreManagedExternally =
+                configuration.getBoolean(MAPREDUCE_EXTERNAL_SNAPSHOT_RESTORE, DEFAULT_MAPREDUCE_EXTERNAL_SNAPSHOT_RESTORE);
+        return isSnapshotRestoreManagedExternally;
     }
 
 }

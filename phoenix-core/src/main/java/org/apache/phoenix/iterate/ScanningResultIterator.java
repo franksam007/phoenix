@@ -121,6 +121,8 @@ public class ScanningResultIterator implements ResultIterator {
                     scanMetricsMap.get(COUNT_OF_ROWS_SCANNED_KEY_METRIC_NAME));
             changeMetric(scanMetricsHolder.getCountOfRowsFiltered(),
                     scanMetricsMap.get(COUNT_OF_ROWS_FILTERED_KEY_METRIC_NAME));
+            changeMetric(scanMetricsHolder.getCountOfBytesScanned(),
+                    scanMetricsMap.get(BYTES_IN_RESULTS_METRIC_NAME));
 
             changeMetric(GLOBAL_SCAN_BYTES,
                     scanMetricsMap.get(BYTES_IN_RESULTS_METRIC_NAME));
@@ -156,7 +158,7 @@ public class ScanningResultIterator implements ResultIterator {
     public Tuple next() throws SQLException {
         try {
             Result result = scanner.next();
-            while (result != null && isDummy(result)) {
+            while (result != null && (result.isEmpty() || isDummy(result))) {
                 result = scanner.next();
             }
             if (result == null) {

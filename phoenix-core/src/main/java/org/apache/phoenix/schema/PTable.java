@@ -728,6 +728,14 @@ public interface PTable extends PMetaDataEntity {
      * (use @getPhysicalTableName for this case) 
      */
     PName getParentTableName();
+
+    /**
+     * @return the logical full name of the base table. In case of the view index, it is the _IDX_+logical name of base table
+     * Ex: For hierarchical views like tableLogicalName --> view1 --> view2, for view2, returns sc.tableLogicalName
+     * For view2, getParentTableName returns view1 and getBaseTableLogicalName returns sc.tableLogicalName
+     */
+    PName getBaseTableLogicalName();
+
     /**
      * @return the schema name of the parent view for a view or data table for an index table 
      * or null if this is not a view or index table. Also returns null for view of a data table 
@@ -747,6 +755,13 @@ public interface PTable extends PMetaDataEntity {
      * @return the name of the physical HBase table storing the data.
      */
     PName getPhysicalName();
+    /**
+     * If returnColValueFromSyscat is true, returns the column value set in the syscat.
+     * Otherwise, behaves like getPhysicalName()
+     * @return the name of the physical HBase table storing the data.
+     */
+    PName getPhysicalName(boolean returnColValueFromSyscat);
+
     boolean isImmutableRows();
 
     boolean getIndexMaintainers(ImmutableBytesWritable ptr, PhoenixConnection connection);
@@ -831,6 +846,13 @@ public interface PTable extends PMetaDataEntity {
      * annotate write-ahead logs with additional metadata
      */
     boolean isChangeDetectionEnabled();
+
+    /**
+     * @return User-provided string identifying the application version that last created or modified this schema
+     * object. Used only on tables, views, and indexes.
+     */
+    String getSchemaVersion();
+
     /**
      * Class to help track encoded column qualifier counters per column family.
      */

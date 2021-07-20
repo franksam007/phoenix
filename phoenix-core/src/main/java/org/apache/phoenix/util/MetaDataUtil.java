@@ -73,6 +73,7 @@ import org.apache.phoenix.schema.types.PInteger;
 import org.apache.phoenix.schema.types.PLong;
 import org.apache.phoenix.schema.types.PSmallint;
 import org.apache.phoenix.schema.types.PUnsignedTinyint;
+import org.apache.phoenix.thirdparty.com.google.common.collect.ImmutableMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -99,6 +100,11 @@ public class MetaDataUtil {
     public static final String DATA_TABLE_NAME_PROP_NAME = "DATA_TABLE_NAME";
 
     public static final byte[] DATA_TABLE_NAME_PROP_BYTES = Bytes.toBytes(DATA_TABLE_NAME_PROP_NAME);
+
+    private static final Map<MajorMinorVersion, MajorMinorVersion> ALLOWED_SERVER_CLIENT_MAJOR_VERSION =
+            ImmutableMap.of(
+                    new MajorMinorVersion(5, 1), new MajorMinorVersion(4, 16)
+            );
 
     // See PHOENIX-3955
     public static final List<String> SYNCED_DATA_TABLE_AND_INDEX_COL_FAM_PROPERTIES = ImmutableList.of(
@@ -176,13 +182,22 @@ public class MetaDataUtil {
             compatibility.setCompatible(false);
             return compatibility;
         } else if (VersionUtil.encodeMaxMinorVersion(clientMajorVersion) < serverVersion) { // Client major version must at least be up to server major version
-            compatibility.setErrorCode(SQLExceptionCode.INCOMPATIBLE_CLIENT_SERVER_JAR.getErrorCode());
-            compatibility.setCompatible(false);
-            return compatibility;
+            MajorMinorVersion serverMajorMinorVersion = new MajorMinorVersion(
+                    VersionUtil.decodeMajorVersion(serverVersion),
+                    VersionUtil.decodeMinorVersion(serverVersion));
+            MajorMinorVersion clientMajorMinorVersion =
+                    new MajorMinorVersion(clientMajorVersion, clientMinorVersion);
+            if (!clientMajorMinorVersion.equals(
+                    ALLOWED_SERVER_CLIENT_MAJOR_VERSION.get(serverMajorMinorVersion))) {
+                // Incompatible if not whitelisted by ALLOWED_SERVER_CLIENT_MAJOR_VERSION
+                compatibility.setErrorCode(SQLExceptionCode
+                        .INCOMPATIBLE_CLIENT_SERVER_JAR.getErrorCode());
+                compatibility.setCompatible(false);
+                return compatibility;
+            }
         }
         compatibility.setCompatible(true);
         return compatibility;
-
     }
 
     // Given the encoded integer representing the phoenix version in the encoded version value.
@@ -231,8 +246,8 @@ public class MetaDataUtil {
      * Encode HBase and Phoenix version along with some server-side config information such as whether WAL codec is
      * installed (necessary for non transactional, mutable secondar indexing), and whether systemNamespace mapping is enabled.
      * 
-     * @param env
-     *            RegionCoprocessorEnvironment to access HBase version and Configuration.
+     * @param hbaseVersionStr
+     * @param config
      * @return long value sent back during initialization of a cluster connection.
      */
     public static long encodeVersion(String hbaseVersionStr, Configuration config) {
@@ -596,6 +611,19 @@ public class MetaDataUtil {
         return getIndexPhysicalName(physicalTableName, VIEW_INDEX_TABLE_PREFIX);
     }
 
+    public static String getNamespaceMappedName(PName tableName, boolean isNamespaceMapped) {
+        String logicalName = tableName.getString();
+        if (isNamespaceMapped) {
+            logicalName = logicalName.replace(QueryConstants.NAME_SEPARATOR, QueryConstants.NAMESPACE_SEPARATOR);
+        }
+        return logicalName;
+    }
+
+    public static String getViewIndexPhysicalName(PName logicalTableName, boolean isNamespaceMapped) {
+        String logicalName = getNamespaceMappedName(logicalTableName, isNamespaceMapped);
+        return getIndexPhysicalName(logicalName, VIEW_INDEX_TABLE_PREFIX);
+    }
+
     private static byte[] getIndexPhysicalName(byte[] physicalTableName, String indexPrefix) {
         return Bytes.toBytes(getIndexPhysicalName(Bytes.toString(physicalTableName), indexPrefix));
     }
@@ -680,13 +708,13 @@ public class MetaDataUtil {
         return new SequenceKey(isNamespaceMapped ? tenantId : null, schemaName, tableName, nSaltBuckets);
     }
 
-    public static String getViewIndexSequenceSchemaName(PName physicalName, boolean isNamespaceMapped) {
+    public static String getViewIndexSequenceSchemaName(PName logicalBaseTableName, boolean isNamespaceMapped) {
         if (!isNamespaceMapped) {
-            String baseTableName = SchemaUtil.getParentTableNameFromIndexTable(physicalName.getString(),
+            String baseTableName = SchemaUtil.getParentTableNameFromIndexTable(logicalBaseTableName.getString(),
                 MetaDataUtil.VIEW_INDEX_TABLE_PREFIX);
             return SchemaUtil.getSchemaNameFromFullName(baseTableName);
         } else {
-            return SchemaUtil.getSchemaNameFromFullName(physicalName.toString());
+            return SchemaUtil.getSchemaNameFromFullName(logicalBaseTableName.toString());
         }
 
     }
@@ -801,10 +829,9 @@ public class MetaDataUtil {
     
     /**
      * This function checks if all regions of a table is online
+     * @param conf
      * @param table
      * @return true when all regions of a table are online
-     * @throws IOException
-     * @throws
      */
     public static boolean tableRegionsOnline(Configuration conf, PTable table) {
         try (ClusterConnection hcon =

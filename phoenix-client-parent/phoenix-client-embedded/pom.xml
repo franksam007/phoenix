@@ -22,9 +22,10 @@
   <parent>
     <groupId>org.apache.phoenix</groupId>
     <artifactId>phoenix-client-parent</artifactId>
-    <version>5.1.0-SNAPSHOT</version>
+    <version>5.2.0-SNAPSHOT</version>
   </parent>
-  <artifactId>phoenix-client-embedded</artifactId>
+
+  <artifactId>phoenix-client-embedded-${hbase.suffix}</artifactId>
   <name>Phoenix Client Embedded</name>
   <description>Phoenix Client without logging implementation</description>
   <packaging>jar</packaging>
@@ -53,7 +54,6 @@
                 <excludes>
                   <exclude>org.apache.phoenix:phoenix-client</exclude>
                   <exclude>xom:xom</exclude>
-                  <exclude>org.slf4j:slf4j-log4j12</exclude>
                 </excludes>
               </artifactSet>
             </configuration>
@@ -63,4 +63,23 @@
     </plugins>
   </build>
 
+  <dependencies>
+    <!-- These must not be moved to phoenix-client-parent, see PHOENIX-6377 -->
+    <!-- Depend on all other internal projects -->
+    <dependency>
+      <groupId>org.apache.phoenix</groupId>
+      <artifactId>phoenix-core</artifactId>
+      <exclusions>
+        <exclusion>
+          <groupId>org.slf4j</groupId>
+          <artifactId>slf4j-log4j12</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.phoenix</groupId>
+      <artifactId>phoenix-hbase-compat-${hbase.compat.version}</artifactId>
+      <optional>false</optional>
+    </dependency>
+  </dependencies>
 </project>

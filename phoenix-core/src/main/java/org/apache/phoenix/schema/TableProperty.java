@@ -294,6 +294,23 @@ public enum TableProperty {
         public Object getPTableValue(PTable table) {
             return table.isChangeDetectionEnabled();
         }
+    },
+
+    PHYSICAL_TABLE_NAME(PhoenixDatabaseMetaData.PHYSICAL_TABLE_NAME, COLUMN_FAMILY_NOT_ALLOWED_TABLE_PROPERTY, true, false, false) {
+        @Override public Object getPTableValue(PTable table) {
+            return table.getPhysicalName(true);
+        }
+    },
+
+    SCHEMA_VERSION(PhoenixDatabaseMetaData.SCHEMA_VERSION, COLUMN_FAMILY_NOT_ALLOWED_TABLE_PROPERTY, true, true, true) {
+        @Override
+        public Object getValue(Object value) {
+            return value == null ? null : SchemaUtil.normalizeIdentifier(value.toString());
+        }
+
+        @Override public Object getPTableValue(PTable table) {
+            return table.getSchemaVersion();
+        }
     }
     ;
 

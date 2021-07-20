@@ -76,6 +76,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.Callable;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -155,7 +156,7 @@ public abstract class BasePermissionsIT extends BaseTest {
     }
 
     @BeforeClass
-    public static void skipHBase21() {
+    public static synchronized void skipHBase21() {
         assumeFalse(VersionInfo.getVersion().startsWith("2.1"));
     }
 
@@ -908,22 +909,29 @@ public abstract class BasePermissionsIT extends BaseTest {
 
             }
         });
-        if(isNamespaceMapped) {
-            verifyAllowed(new AccessTestAction() {
-                @Override public Object run() throws Exception {
+        if (isNamespaceMapped) {
+            retryVerifyOperation(() -> {
+                verifyAllowed(() -> {
                     Properties props = new Properties();
-                    props.setProperty(QueryServices.IS_NAMESPACE_MAPPING_ENABLED, Boolean.toString(isNamespaceMapped));
-                    props.setProperty(PhoenixRuntime.CURRENT_SCN_ATTRIB, Long.toString(MetaDataProtocol.MIN_SYSTEM_TABLE_TIMESTAMP));
+                    props.setProperty(
+                            QueryServices.IS_NAMESPACE_MAPPING_ENABLED,
+                            Boolean.toString(isNamespaceMapped));
+                    props.setProperty(PhoenixRuntime.CURRENT_SCN_ATTRIB,
+                            Long.toString(MetaDataProtocol
+                                    .MIN_SYSTEM_TABLE_TIMESTAMP));
                     //Impersonate meta connection
-                    try (Connection metaConnection = DriverManager.getConnection(getUrl(), props);
+                    try (Connection metaConnection =
+                                 DriverManager.getConnection(getUrl(), props);
                          Statement stmt = metaConnection.createStatement()) {
-                        stmt.executeUpdate("CREATE SCHEMA IF NOT EXISTS SYSTEM");
-                    }catch(NewerSchemaAlreadyExistsException e){
-
+                        stmt.executeUpdate(
+                                "CREATE SCHEMA IF NOT EXISTS SYSTEM");
+                    } catch (NewerSchemaAlreadyExistsException e) {
+                        // ignore
                     }
                     return null;
-                }
-            }, regularUser1);
+                }, regularUser1);
+                return null;
+            }, UndeclaredThrowableException.class, 4);
         }
     }
 
@@ -986,7 +994,7 @@ public abstract class BasePermissionsIT extends BaseTest {
      * Tests grant revoke permissions on per user global level
      */
     @Test
-    public void testSuperUserCanChangePerms() throws Exception {
+    public void testSuperUserCanChangePerms() throws Throwable {
         // Grant System Table access to all users, else they can't create a Phoenix connection
         grantSystemTableAccess(superUser1, regularUser1, regularUser2, unprivilegedUser);
 
@@ -996,11 +1004,49 @@ public abstract class BasePermissionsIT extends BaseTest {
         verifyAllowed(grantPermissions("A", regularUser2), regularUser1);
 
         verifyAllowed(revokePermissions(regularUser1), superUser1);
-        verifyDenied(grantPermissions("A", regularUser3), AccessDeniedException.class, regularUser1);
+        retryVerifyOperation(() -> {
+            verifyDenied(grantPermissions("A", regularUser3),
+                    AccessDeniedException.class, regularUser1);
+            return null;
+        }, AssertionError.class, 5);
 
         // Don't grant ADMIN perms to unprivilegedUser, thus unprivilegedUser is unable to control other permissions.
         verifyAllowed(getConnectionAction(), unprivilegedUser);
         verifyDenied(grantPermissions("ARX", regularUser4), AccessDeniedException.class, unprivilegedUser);
+    }
+
+    /**
+     * Retries a verify operation wrapped in Callable. Can expect Throwable
+     * of given class type until all retries are consumed.
+     *
+     * @param callable Action to be retried is wrapped in Callable.
+     * @param clazz Can expect Throwable of this class/subclass.
+     * @param retries no of retries.
+     * @param <T> for Callable.
+     * @param <E> Any class derived from Throwable.
+     * @throws Throwable can throw Throwable when all retries are exhausted or
+     *     if expected Throwable is not of category clazz.
+     */
+    private <T, E extends Throwable> void retryVerifyOperation(
+            Callable<T> callable, Class<E> clazz, int retries)
+            throws Throwable {
+        while (retries > 0) {
+            try {
+                callable.call();
+                break;
+            } catch (Throwable e) {
+                if (!clazz.isAssignableFrom(e.getClass())) {
+                    LOGGER.error("Something went wrong.", e);
+                    throw e;
+                }
+                if (retries == 1) {
+                    LOGGER.error("All retries exhausted.", e);
+                    throw e;
+                }
+            }
+            Thread.sleep(2000);
+            retries--;
+        }
     }
 
     /**
@@ -1016,7 +1062,68 @@ public abstract class BasePermissionsIT extends BaseTest {
             verifyAllowed(createSchema(schemaName), superUser1);
             verifyAllowed(grantPermissions("C", regularUser1, schemaName, true), superUser1);
         } else {
-            verifyAllowed(grantPermissions("C", regularUser1, surroundWithDoubleQuotes(QueryConstants.HBASE_DEFAULT_SCHEMA_NAME), true), superUser1);
+            verifyAllowed(grantPermissions("C", regularUser1, surroundWithDoubleQuotes(SchemaUtil.SCHEMA_FOR_DEFAULT_NAMESPACE), true), superUser1);
+        }
+
+        // Create new table. Create indexes, views and view indexes on top of it. Verify the contents by querying it
+        verifyAllowed(createTable(fullTableName), regularUser1);
+        verifyAllowed(readTable(fullTableName), regularUser1);
+        verifyAllowed(createIndex(idx1TableName, fullTableName), regularUser1);
+        verifyAllowed(createIndex(idx2TableName, fullTableName), regularUser1);
+        verifyAllowed(createLocalIndex(localIdx1TableName, fullTableName), regularUser1);
+        verifyAllowed(createView(view1TableName, fullTableName), regularUser1);
+        verifyAllowed(createIndex(idx3TableName, view1TableName), regularUser1);
+
+        // RegularUser2 doesn't have any permissions. It can get a PhoenixConnection
+        // However it cannot query table, indexes or views without READ perms
+        verifyAllowed(getConnectionAction(), regularUser2);
+        verifyDenied(readTable(fullTableName), AccessDeniedException.class, regularUser2);
+        verifyDenied(readTable(fullTableName, idx1TableName), AccessDeniedException.class, regularUser2);
+        verifyDenied(readTable(view1TableName), AccessDeniedException.class, regularUser2);
+        verifyDenied(readTableWithoutVerification(schemaName + "." + idx1TableName), AccessDeniedException.class, regularUser2);
+
+        // Grant READ permissions to RegularUser2 on the table
+        // Permissions should propagate automatically to relevant physical tables such as global index and view index.
+        verifyAllowed(grantPermissions("RX", regularUser2, fullTableName, false), regularUser1);
+        // Granting permissions directly to index tables should fail
+        verifyDenied(grantPermissions("W", regularUser2, schemaName + "." + idx1TableName, false), AccessDeniedException.class, regularUser1);
+        // Granting permissions directly to views should fail. We expect TableNotFoundException since VIEWS are not physical tables
+        verifyDenied(grantPermissions("W", regularUser2, schemaName + "." + view1TableName, false), TableNotFoundException.class, regularUser1);
+
+        // Verify that all other access are successful now
+        verifyAllowed(readTable(fullTableName), regularUser2);
+        verifyAllowed(readTable(fullTableName, idx1TableName), regularUser2);
+        verifyAllowed(readTable(fullTableName, idx2TableName), regularUser2);
+        verifyAllowed(readTable(fullTableName, localIdx1TableName), regularUser2);
+        verifyAllowed(readTableWithoutVerification(schemaName + "." + idx1TableName), regularUser2);
+        verifyAllowed(readTable(view1TableName), regularUser2);
+        verifyAllowed(readMultiTenantTableWithIndex(view1TableName), regularUser2);
+
+        // Revoke READ permissions to RegularUser2 on the table
+        // Permissions should propagate automatically to relevant physical tables such as global index and view index.
+        verifyAllowed(revokePermissions(regularUser2, fullTableName, false), regularUser1);
+        // READ query should fail now
+        verifyDenied(readTable(fullTableName), AccessDeniedException.class, regularUser2);
+        verifyDenied(readTableWithoutVerification(schemaName + "." + idx1TableName), AccessDeniedException.class, regularUser2);
+    }
+
+    /**
+     * Test to verify READ permissions on table, indexes and views
+     * Tests automatic grant revoke of permissions per user on a table
+     */
+    @Test
+    public void testReadPermsOnTableIndexAndViewOnLowerCaseSchema() throws Exception {
+        grantSystemTableAccess(superUser1, regularUser1, regularUser2, unprivilegedUser);
+
+        schemaName = "\"" + schemaName.toLowerCase() + "\"";
+        fullTableName = schemaName + "." + tableName;
+
+        // Create new schema and grant CREATE permissions to a user
+        if(isNamespaceMapped) {
+            verifyAllowed(createSchema(schemaName), superUser1);
+            verifyAllowed(grantPermissions("C", regularUser1, schemaName, true), superUser1);
+        } else {
+            verifyAllowed(grantPermissions("C", regularUser1, surroundWithDoubleQuotes(SchemaUtil.SCHEMA_FOR_DEFAULT_NAMESPACE), true), superUser1);
         }
 
         // Create new table. Create indexes, views and view indexes on top of it. Verify the contents by querying it
@@ -1100,7 +1207,7 @@ public abstract class BasePermissionsIT extends BaseTest {
             verifyAllowed(createSchema(schemaName), superUser1);
             verifyAllowed(grantPermissions("C", regularUser1, schemaName, true), superUser1);
         } else {
-            verifyAllowed(grantPermissions("C", regularUser1, surroundWithDoubleQuotes(QueryConstants.HBASE_DEFAULT_SCHEMA_NAME), true), superUser1);
+            verifyAllowed(grantPermissions("C", regularUser1, surroundWithDoubleQuotes(SchemaUtil.SCHEMA_FOR_DEFAULT_NAMESPACE), true), superUser1);
         }
 
         // Create MultiTenant Table (View Index Table should be automatically created)
@@ -1146,7 +1253,7 @@ public abstract class BasePermissionsIT extends BaseTest {
             verifyAllowed(grantPermissions("RX", regularUser1, schemaName, true), superUser1);
         } else {
             verifyAllowed(createTable(fullTableName), superUser1);
-            verifyAllowed(grantPermissions("RX", regularUser1, surroundWithDoubleQuotes(QueryConstants.HBASE_DEFAULT_SCHEMA_NAME), true), superUser1);
+            verifyAllowed(grantPermissions("RX", regularUser1, surroundWithDoubleQuotes(SchemaUtil.SCHEMA_FOR_DEFAULT_NAMESPACE), true), superUser1);
         }
         verifyAllowed(createView(view1TableName, fullTableName), regularUser1);
     }
@@ -1291,7 +1398,10 @@ public abstract class BasePermissionsIT extends BaseTest {
             verifyAllowed(dropView(viewName2), regularUser1);
             verifyAllowed(dropColumn(phoenixTableName, "val1"), regularUser1);
             verifyAllowed(dropIndex(indexName1, phoenixTableName), regularUser1);
-            verifyAllowed(dropTable(phoenixTableName), regularUser1);
+            retryVerifyOperation(() -> {
+                verifyAllowed(dropTable(phoenixTableName), regularUser1);
+                return null;
+            }, UndeclaredThrowableException.class, 4);
 
             // check again with super users
             verifyAllowed(createTable(phoenixTableName), superUser2);
@@ -1360,7 +1470,10 @@ public abstract class BasePermissionsIT extends BaseTest {
             verifyAllowed(readStatsAfterTableDelete(SchemaUtil.getPhysicalHBaseTableName(
                     schema, indexName1, isNamespaceMapped).getString()), regularUser1);
             verifyAllowed(dropIndex(lIndexName1,  phoenixTableName), regularUser1);
-            verifyAllowed(dropTable(phoenixTableName), regularUser1);
+            retryVerifyOperation(() -> {
+                verifyAllowed(dropTable(phoenixTableName), regularUser1);
+                return null;
+            }, UndeclaredThrowableException.class, 4);
             Thread.sleep(3000);
             verifyAllowed(readStatsAfterTableDelete(SchemaUtil.getPhysicalHBaseTableName(
                     schema, tableName, isNamespaceMapped).getString()), regularUser1);

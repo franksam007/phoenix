@@ -32,6 +32,7 @@ import org.apache.phoenix.compile.ExplainPlanAttributes
     .ExplainPlanAttributesBuilder;
 import org.apache.phoenix.compile.QueryPlan;
 import org.apache.phoenix.compile.StatementContext;
+import org.apache.phoenix.monitoring.OverAllQueryMetrics;
 import org.apache.phoenix.query.ConnectionQueryServices;
 import org.apache.phoenix.schema.tuple.Tuple;
 import org.apache.phoenix.util.ServerUtil;
@@ -114,6 +115,7 @@ public class RoundRobinResultIterator implements ResultIterator {
                 index = (index + 1) % size;
             }
         }
+        close();
         return null;
     }
 
@@ -279,6 +281,13 @@ public class RoundRobinResultIterator implements ResultIterator {
             } finally {
                 if (toThrow != null) {
                     GLOBAL_FAILED_QUERY_COUNTER.increment();
+                    OverAllQueryMetrics overAllQueryMetrics = plan.getContext().getOverallQueryMetrics();
+                    overAllQueryMetrics.queryFailed();
+                    if (plan.getContext().getScanRanges().isPointLookup()) {
+                        overAllQueryMetrics.queryPointLookupFailed();
+                    } else {
+                        overAllQueryMetrics.queryScanFailed();
+                    }
                     throw toThrow;
                 }
             }
@@ -291,7 +300,7 @@ public class RoundRobinResultIterator implements ResultIterator {
      * keeps track of the tuple the {@link PeekingResultIterator} read in the previous next() call before it ran out of
      * underlying scanner cache.
      */
-    private class RoundRobinIterator implements PeekingResultIterator {
+    private static class RoundRobinIterator implements PeekingResultIterator {
 
         private PeekingResultIterator delegate;
         private Tuple tuple;

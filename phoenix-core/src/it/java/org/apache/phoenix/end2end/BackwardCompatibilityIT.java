@@ -41,7 +41,9 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
+import java.io.IOException;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.util.Collection;
@@ -52,21 +54,27 @@ import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.TableDescriptor;
+import org.apache.phoenix.compat.hbase.CompatUtil;
 import org.apache.phoenix.coprocessor.SystemCatalogRegionObserver;
 import org.apache.phoenix.coprocessor.TaskMetaDataEndpoint;
+import org.apache.phoenix.end2end.BackwardCompatibilityTestUtil.MavenCoordinates;
 import org.apache.phoenix.jdbc.PhoenixDatabaseMetaData;
 import org.apache.phoenix.jdbc.PhoenixDriver;
 import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.query.QueryServicesOptions;
 import org.apache.phoenix.schema.SystemTaskSplitPolicy;
 import org.apache.phoenix.util.PhoenixRuntime;
+import org.apache.phoenix.util.ServerUtil.ConnectionFactory;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This class is meant for testing all compatible client versions 
@@ -78,19 +86,22 @@ import org.junit.runners.Parameterized.Parameters;
 @Category(NeedsOwnMiniClusterTest.class)
 public class BackwardCompatibilityIT {
 
-    private final String compatibleClientVersion;
+    private static final Logger LOGGER = LoggerFactory.getLogger(
+            BackwardCompatibilityIT.class);
+
+    private final MavenCoordinates compatibleClientVersion;
     private static Configuration conf;
     private static HBaseTestingUtility hbaseTestUtil;
     private static String zkQuorum;
     private static String url;
     private String tmpDir;
 
-    public BackwardCompatibilityIT(String compatibleClientVersion) {
+    public BackwardCompatibilityIT(MavenCoordinates compatibleClientVersion) {
         this.compatibleClientVersion = compatibleClientVersion;
     }
 
     @Parameters(name = "BackwardCompatibilityIT_compatibleClientVersion={0}")
-    public static synchronized Collection<String> data() throws Exception {
+    public static synchronized Collection<MavenCoordinates> data() throws Exception {
         return computeClientVersions();
     }
 
@@ -107,15 +118,18 @@ public class BackwardCompatibilityIT {
         DriverManager.registerDriver(PhoenixDriver.INSTANCE);
         checkForPreConditions(compatibleClientVersion, conf);
     }
-    
+
     @After
-    public void cleanUpAfterTest() throws Exception {
+    public synchronized void cleanUpAfterTest() throws Exception {
+        boolean refCountLeaked = CompatUtil.isAnyStoreRefCountLeaked(hbaseTestUtil.getAdmin());
+        ConnectionFactory.shutdown();
         try {
             DriverManager.deregisterDriver(PhoenixDriver.INSTANCE);
         } finally {
             hbaseTestUtil.shutdownMiniCluster();
         }
         System.setProperty("java.io.tmpdir", tmpDir);
+        assertFalse("refCount leaked", refCountLeaked);
     }
 
     /**
@@ -312,7 +326,7 @@ public class BackwardCompatibilityIT {
         assertExpectedOutput(QUERY_CREATE_ADD);
 
         // Deletes with the new client
-        executeQueriesWithCurrentVersion(ADD_DELETE,url, NONE);
+        executeQueriesWithCurrentVersion(ADD_DELETE, url, NONE);
         executeQueriesWithCurrentVersion(QUERY_ADD_DELETE, url, NONE);
         assertExpectedOutput(QUERY_ADD_DELETE);
     }
@@ -322,7 +336,7 @@ public class BackwardCompatibilityIT {
         executeQueryWithClientVersion(compatibleClientVersion,
             CREATE_DIVERGED_VIEW, zkQuorum);
 
-        String[] versionArr = compatibleClientVersion.split("\\.");
+        String[] versionArr = compatibleClientVersion.getVersion().split("\\.");
         int majorVersion = Integer.parseInt(versionArr[0]);
         int minorVersion = Integer.parseInt(versionArr[1]);
         org.apache.hadoop.hbase.client.Connection conn = null;
@@ -364,31 +378,43 @@ public class BackwardCompatibilityIT {
             TaskMetaDataEndpoint.class.getName()));
         assertExpectedOutput(QUERY_CREATE_DIVERGED_VIEW);
         admin.close();
-        conn.close();
     }
 
     @Test
     public void testSystemTaskCreationWithIndexAsyncRebuild() throws Exception {
-        String[] versionArr = compatibleClientVersion.split("\\.");
+        String[] versionArr = compatibleClientVersion.getVersion().split("\\.");
         int majorVersion = Integer.parseInt(versionArr[0]);
         int minorVersion = Integer.parseInt(versionArr[1]);
         // index async rebuild support min version check
         if (majorVersion > 4 || (majorVersion == 4 && minorVersion >= 15)) {
             executeQueryWithClientVersion(compatibleClientVersion,
                 INDEX_REBUILD_ASYNC, zkQuorum);
-            executeQueriesWithCurrentVersion(QUERY_INDEX_REBUILD_ASYNC, url, NONE);
-            assertExpectedOutput(QUERY_INDEX_REBUILD_ASYNC);
+            // wait to finish the rebuild job (convoluted logic to preserve the AssertionError)
+            int retryCount=0;
+            while (true) {
+                try {
+                    Thread.sleep(5000);
+                    executeQueriesWithCurrentVersion(QUERY_INDEX_REBUILD_ASYNC, url, NONE);
+                    assertExpectedOutput(QUERY_INDEX_REBUILD_ASYNC);
+                    break;
+                } catch (AssertionError e) {
+                    if (retryCount++ > 10) {
+                        throw e;
+                    }
+                }
+            }
         }
     }
 
     @Test
     public void testViewIndexIdCreatedWithOldClient() throws Exception {
         executeQueryWithClientVersion(compatibleClientVersion, ADD_VIEW_INDEX, zkQuorum);
-        try (org.apache.hadoop.hbase.client.Connection conn =
-                     hbaseTestUtil.getConnection(); Admin admin = conn.getAdmin()) {
+        org.apache.hadoop.hbase.client.Connection conn = hbaseTestUtil.getConnection();
+        try (Admin admin = conn.getAdmin()) {
             HTableDescriptor tableDescriptor = admin.getTableDescriptor(
                     TableName.valueOf(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME));
-            assertFalse("Coprocessor " + SystemCatalogRegionObserver.class.getName()
+            //The oldest client we test is 5.1.0, which already adds SystemCatalogRegionObserver
+            assertTrue("Coprocessor " + SystemCatalogRegionObserver.class.getName()
                     + " has been added with compatible client version: "
                     + compatibleClientVersion, tableDescriptor.hasCoprocessor(
                     SystemCatalogRegionObserver.class.getName()));

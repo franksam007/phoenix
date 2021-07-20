@@ -22,7 +22,7 @@
   <parent>
     <groupId>org.apache.phoenix</groupId>
     <artifactId>phoenix</artifactId>
-    <version>5.1.0-SNAPSHOT</version>
+    <version>5.2.0-SNAPSHOT</version>
   </parent>
   <artifactId>phoenix-assembly</artifactId>
   <name>Phoenix Assembly</name>
@@ -53,11 +53,32 @@
               <arguments>
                 <argument>-fnsv</argument>
                 <argument>
-                  phoenix-client-${project.version}.jar
+                  phoenix-client-${hbase.suffix}-${project.version}.jar
                 </argument>
                 <argument>
                   <!-- We are overwriting the unshaded client JAR, but we don't care -->
-                  phoenix-client.jar
+                  phoenix-client-${hbase.suffix}.jar
+                </argument>
+              </arguments>
+            </configuration>
+          </execution>
+          <execution>
+            <id>embedded client without version</id>
+            <phase>compile</phase>
+            <goals>
+              <goal>exec</goal>
+            </goals>
+            <configuration>
+              <executable>ln</executable>
+              <workingDirectory>${project.basedir}/../phoenix-client-parent/phoenix-client-embedded/target</workingDirectory>
+              <arguments>
+                <argument>-fnsv</argument>
+                <argument>
+                  phoenix-client-embedded-${hbase.suffix}-${project.version}.jar
+                </argument>
+                <argument>
+                  <!-- We are overwriting the unshaded client JAR, but we don't care -->
+                  phoenix-client-embedded-${hbase.suffix}.jar
                 </argument>
               </arguments>
             </configuration>
@@ -74,11 +95,51 @@
               <arguments>
                 <argument>-fnsv</argument>
                 <argument>
-                  phoenix-server-${project.version}.jar
+                  phoenix-server-${hbase.suffix}-${project.version}.jar
                 </argument>
                 <argument>
                   <!-- We are overwriting the unshaded server JAR, but we don't care -->
-                  phoenix-server.jar
+                  phoenix-server-${hbase.suffix}.jar
+                </argument>
+              </arguments>
+            </configuration>
+          </execution>
+          <execution>
+            <id>pherf without version</id>
+            <phase>compile</phase>
+            <goals>
+              <goal>exec</goal>
+            </goals>
+            <configuration>
+              <executable>ln</executable>
+              <workingDirectory>${project.basedir}/../phoenix-pherf/target</workingDirectory>
+              <arguments>
+                <argument>-fnsv</argument>
+                <argument>
+                  phoenix-pherf-${project.version}.jar
+                </argument>
+                <argument>
+                  phoenix-pherf.jar
+                </argument>
+              </arguments>
+            </configuration>
+          </execution>
+          <execution>
+            <id>tools without version</id>
+            <phase>compile</phase>
+            <goals>
+              <goal>exec</goal>
+            </goals>
+            <configuration>
+              <executable>ln</executable>
+              <workingDirectory>${project.basedir}/../phoenix-tools/target</workingDirectory>
+              <arguments>
+                <argument>-fnsv</argument>
+                <argument>
+                  phoenix-tools-${project.version}.jar
+                </argument>
+                <argument>
+                  phoenix-tools.jar
                 </argument>
               </arguments>
             </configuration>
@@ -107,7 +168,7 @@
               <goal>single</goal>
             </goals>
             <configuration>
-            <finalName>phoenix-${project.version}-bin</finalName>
+            <finalName>phoenix-${hbase.suffix}-${project.version}-bin</finalName>
               <attach>false</attach>
               <tarLongFileMode>gnu</tarLongFileMode>
               <appendAssemblyId>false</appendAssemblyId>
@@ -126,11 +187,15 @@
     <!-- Depend on all other internal projects -->
     <dependency>
       <groupId>org.apache.phoenix</groupId>
-      <artifactId>phoenix-server</artifactId>
+      <artifactId>phoenix-server-${hbase.suffix}</artifactId>
     </dependency>
     <dependency>
       <groupId>org.apache.phoenix</groupId>
-      <artifactId>phoenix-client</artifactId>
+      <artifactId>phoenix-client-${hbase.suffix}</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.phoenix</groupId>
+      <artifactId>phoenix-client-embedded-${hbase.suffix}</artifactId>
     </dependency>
     <dependency>
       <groupId>org.apache.phoenix</groupId>
@@ -142,15 +207,7 @@
     </dependency>
     <dependency>
       <groupId>org.apache.phoenix</groupId>
-      <artifactId>phoenix-hbase-compat-2.1.6</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.phoenix</groupId>
-      <artifactId>phoenix-hbase-compat-2.2.1</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.phoenix</groupId>
-      <artifactId>phoenix-hbase-compat-2.3.0</artifactId>
+      <artifactId>phoenix-tools</artifactId>
     </dependency>
 
     <dependency>
@@ -194,6 +251,13 @@
     <dependency>
       <groupId>org.apache.htrace</groupId>
       <artifactId>htrace-core</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>sqlline</groupId>
+      <artifactId>sqlline</artifactId>
+      <version>${sqlline.version}</version>
+      <classifier>jar-with-dependencies</classifier>
     </dependency>
 
   </dependencies>

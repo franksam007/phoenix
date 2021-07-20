@@ -39,7 +39,7 @@ pipeline {
                 axes {
                     axis {
                         name 'HBASE_PROFILE'
-                        values '2.1', '2.2', '2.3'
+                        values '2.1', '2.2', '2.3', '2.4'
                     }
                 }
 
@@ -54,12 +54,7 @@ pipeline {
                             timeout(time: 30, unit: 'MINUTES')
                         }
                         environment {
-                            HBASE_VERSION = sh(returnStdout: true, script: "mvn help:evaluate -Dhbase.profile=${HBASE_PROFILE} -Dartifact=org.apache.phoenix:phoenix-core -Dexpression=hbase.version -q -DforceStdout").trim()
-                        }
-                        when {
-                            not {
-                                environment name: 'HBASE_PROFILE', value: '2.1'
-                            }
+                            HBASE_VERSION = sh(returnStdout: true, script: "mvn help:evaluate -Dexpression=hbase-${HBASE_PROFILE}.runtime.version -q -DforceStdout").trim()
                         }
                         steps {
                             sh "dev/rebuild_hbase.sh ${HBASE_VERSION}"

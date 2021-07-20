@@ -322,6 +322,9 @@ public class PhoenixDatabaseMetaData implements DatabaseMetaData {
     public static final String TRANSACTION_PROVIDER = "TRANSACTION_PROVIDER";
     public static final byte[] TRANSACTION_PROVIDER_BYTES = Bytes.toBytes(TRANSACTION_PROVIDER);
 
+    public static final String PHYSICAL_TABLE_NAME = "PHYSICAL_TABLE_NAME";
+    public static final byte[] PHYSICAL_TABLE_NAME_BYTES = Bytes.toBytes(PHYSICAL_TABLE_NAME);
+
     public static final String UPDATE_CACHE_FREQUENCY = "UPDATE_CACHE_FREQUENCY";
     public static final byte[] UPDATE_CACHE_FREQUENCY_BYTES = Bytes.toBytes(UPDATE_CACHE_FREQUENCY);
 
@@ -389,6 +392,9 @@ public class PhoenixDatabaseMetaData implements DatabaseMetaData {
     public static final String CHANGE_DETECTION_ENABLED = "CHANGE_DETECTION_ENABLED";
     public static final byte[] CHANGE_DETECTION_ENABLED_BYTES =
         Bytes.toBytes(CHANGE_DETECTION_ENABLED);
+
+    public static final String SCHEMA_VERSION = "SCHEMA_VERSION";
+    public static final byte[] SCHEMA_VERSION_BYTES = Bytes.toBytes(SCHEMA_VERSION);
 
     public static final String SYSTEM_CHILD_LINK_TABLE = "CHILD_LINK";
     public static final String SYSTEM_CHILD_LINK_NAME = SchemaUtil.getTableName(SYSTEM_CATALOG_SCHEMA, SYSTEM_CHILD_LINK_TABLE);

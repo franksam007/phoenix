@@ -124,27 +124,39 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
 
     public static final int MAX_LOOKBACK_AGE = 3600;
     private final String tableDDLOptions;
+
     private final boolean directApi = true;
     private final boolean useSnapshot = false;
     private final boolean mutable;
+    private final String indexDDLOptions;
+    private boolean singleCell;
+
     @Rule
     public ExpectedException exceptionRule = ExpectedException.none();
 
-    public IndexToolForNonTxGlobalIndexIT(boolean mutable) {
+    public IndexToolForNonTxGlobalIndexIT(boolean mutable, boolean singleCell) {
         StringBuilder optionBuilder = new StringBuilder();
+        StringBuilder indexOptionBuilder = new StringBuilder();
         this.mutable = mutable;
         if (!mutable) {
             optionBuilder.append(" IMMUTABLE_ROWS=true ");
         }
         optionBuilder.append(" SPLIT ON(1,2)");
         this.tableDDLOptions = optionBuilder.toString();
+        if (singleCell) {
+            indexOptionBuilder.append(" IMMUTABLE_STORAGE_SCHEME=SINGLE_CELL_ARRAY_WITH_OFFSETS,COLUMN_ENCODED_BYTES=2");
+        }
+        this.singleCell = singleCell;
+        this.indexDDLOptions = indexOptionBuilder.toString();
     }
 
-    @Parameterized.Parameters(name = "mutable={0}")
+    @Parameterized.Parameters(name = "mutable={0}, singleCellIndex={1}")
     public static synchronized Collection<Object[]> data() {
         return Arrays.asList(new Object[][] {
-                {true},
-                {false} });
+                {true, true},
+                {true, false},
+                {false, true},
+                {false, false} });
     }
 
     @BeforeClass
@@ -214,7 +226,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
             IndexToolIT.setEveryNthRowWithNull(NROWS, 3, stmt);
             conn.commit();
             conn.createStatement().execute(String.format(
-                    "CREATE INDEX %s ON %s (VAL1) INCLUDE (VAL2) ASYNC ", indexTableName, dataTableFullName));
+                    "CREATE INDEX %s ON %s (VAL1) INCLUDE (VAL2) ASYNC " + this.indexDDLOptions, indexTableName, dataTableFullName));
             // Run the index MR job and verify that the index table is built correctly
             IndexTool
                     indexTool = IndexToolIT.runIndexTool(directApi, useSnapshot, schemaName, dataTableName, indexTableName, null, 0, new String[0]);
@@ -264,7 +276,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
                     .execute("upsert into " + dataTableFullName + " values (1, 'Phoenix', 'A')");
             conn.commit();
             conn.createStatement()
-                    .execute(String.format("CREATE INDEX %s ON %s (NAME) INCLUDE (CODE) ASYNC",
+                    .execute(String.format("CREATE INDEX %s ON %s (NAME) INCLUDE (CODE) ASYNC " + this.indexDDLOptions,
                             indexTableName, dataTableFullName));
             IndexTool indexTool = IndexToolIT.runIndexTool(directApi, useSnapshot, schemaName, dataTableName, indexTableName, null, 0,
                     IndexTool.IndexVerifyType.ONLY);
@@ -348,7 +360,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
 
             String stmtString2 =
                     String.format(
-                            "CREATE INDEX %s ON %s  (LPAD(UPPER(NAME, 'en_US'),8,'x')||'_xyz') ", indexTableName, dataTableFullName);
+                            "CREATE INDEX %s ON %s  (LPAD(UPPER(NAME, 'en_US'),8,'x')||'_xyz') " + this.indexDDLOptions, indexTableName, dataTableFullName);
             conn.createStatement().execute(stmtString2);
             conn.commit();
             String qIndexTableName = SchemaUtil.getQualifiedTableName(schemaName, indexTableName);
@@ -402,7 +414,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
             conn.commit();
             String stmtString2 =
                     String.format(
-                            "CREATE INDEX %s ON %s (NAME) INCLUDE (ZIP) ASYNC ", indexTableName, dataTableFullName);
+                            "CREATE INDEX %s ON %s (NAME) INCLUDE (ZIP) ASYNC " + this.indexDDLOptions, indexTableName, dataTableFullName);
             conn.createStatement().execute(stmtString2);
 
             // Run the index MR job and verify that the index table is built correctly
@@ -483,7 +495,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
             conn.commit();
             String stmtString2 =
                     String.format(
-                            "CREATE INDEX %s ON %s (NAME) INCLUDE (ZIP) ASYNC ", indexTableName, dataTableFullName);
+                            "CREATE INDEX %s ON %s (NAME) INCLUDE (ZIP) ASYNC " + this.indexDDLOptions, indexTableName, dataTableFullName);
             conn.createStatement().execute(stmtString2);
 
             // Run the index MR job and verify that the index table is built correctly
@@ -543,7 +555,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
             conn.createStatement().execute("upsert into " + viewFullName + " values (1, 'Phoenix', 12345)");
             conn.commit();
             conn.createStatement().execute(String.format(
-                    "CREATE INDEX %s ON %s (NAME) INCLUDE (ZIP) ASYNC", indexTableName, viewFullName));
+                    "CREATE INDEX %s ON %s (NAME) INCLUDE (ZIP) ASYNC " + this.indexDDLOptions, indexTableName, viewFullName));
             TestUtil.addCoprocessor(conn, "_IDX_" + dataTableFullName, IndexToolIT.MutationCountingRegionObserver.class);
             // Run the index MR job and verify that the index table rebuild succeeds
             IndexToolIT.runIndexTool(directApi, useSnapshot, schemaName, viewName, indexTableName,
@@ -585,7 +597,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
             // lead to any change on index and thus the index verify during index rebuild should fail
             IndexRebuildRegionScanner.setIgnoreIndexRebuildForTesting(true);
             conn.createStatement().execute(String.format(
-                    "CREATE INDEX %s ON %s (NAME) INCLUDE (ZIP) ASYNC", indexTableName, viewFullName));
+                    "CREATE INDEX %s ON %s (NAME) INCLUDE (ZIP) ASYNC " + this.indexDDLOptions, indexTableName, viewFullName));
             if (CompatBaseScannerRegionObserver.isMaxLookbackTimeEnabled(getUtility().getConfiguration())) {
                 // Run the index MR job and verify that the index table rebuild fails
                 IndexToolIT.runIndexTool(directApi, useSnapshot, schemaName, viewName, indexTableName,
@@ -609,6 +621,49 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
     }
 
     @Test
+    public void testIndexToolFailedMapperNotRecordToResultTable() throws Exception {
+        if (mutable != true || singleCell != true ) {
+            return;
+        }
+        Properties props = PropertiesUtil.deepCopy(TEST_PROPERTIES);
+        try (Connection conn = DriverManager.getConnection(getUrl(), props)) {
+            String schemaName = generateUniqueName();
+            String dataTableName = generateUniqueName();
+            String dataTableFullName = SchemaUtil.getTableName(schemaName, dataTableName);
+            String indexTableName = generateUniqueName();
+            String indexTableFullName = SchemaUtil.getTableName(schemaName, indexTableName);
+            conn.createStatement().execute("CREATE TABLE " + dataTableFullName
+                    + " (ID INTEGER NOT NULL PRIMARY KEY, NAME VARCHAR, ZIP INTEGER) "
+                    + tableDDLOptions);
+            conn.commit();
+            // Insert a row
+            conn.createStatement().execute("upsert into " + dataTableFullName + " values (1, 'Phoenix', 12345)");
+            conn.commit();
+            // Configure IndexRegionObserver to fail the first write phase. This should not
+            // lead to any change on index and thus the index verify during index rebuild should fail
+            IndexRebuildRegionScanner.setThrowExceptionForRebuild(true);
+            conn.createStatement().execute(String.format(
+                    "CREATE INDEX %s ON %s (NAME) INCLUDE (ZIP) ASYNC " + this.indexDDLOptions, indexTableName, dataTableFullName));
+            // Run the index MR job and verify that the index table rebuild fails
+            IndexTool it = IndexToolIT.runIndexTool(directApi, useSnapshot, schemaName, dataTableName, indexTableName,
+                    null, -1, IndexTool.IndexVerifyType.BEFORE);
+            Assert.assertEquals(PIndexState.BUILDING, TestUtil.getIndexState(conn, indexTableFullName));
+
+            // Now there is no exception, so the second partial build should retry
+            Long scn = it.getJob().getConfiguration().getLong(CURRENT_SCN_VALUE, 1L);
+            IndexRebuildRegionScanner.setThrowExceptionForRebuild(false);
+            it = IndexToolIT.runIndexTool(directApi, useSnapshot, schemaName, dataTableName, indexTableName,
+                    null, 0, IndexTool.IndexVerifyType.BEFORE,"-rv", Long.toString(scn));
+            Assert.assertEquals(PIndexState.ACTIVE, TestUtil.getIndexState(conn, indexTableFullName));
+            ResultSet rs =
+                    conn.createStatement()
+                            .executeQuery("SELECT COUNT(*) FROM " + indexTableFullName);
+            rs.next();
+            assertEquals(1, rs.getInt(1));
+        }
+    }
+
+    @Test
     public void testIndexToolOnlyVerifyOption() throws Exception {
         String schemaName = generateUniqueName();
         String dataTableName = generateUniqueName();
@@ -623,7 +678,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
             conn.createStatement().execute("upsert into " + dataTableFullName + " values (1, 'Phoenix', 'A')");
             conn.commit();
             conn.createStatement().execute(String.format(
-                    "CREATE INDEX %s ON %s (NAME) INCLUDE (CODE) ASYNC", indexTableName, dataTableFullName));
+                    "CREATE INDEX %s ON %s (NAME) INCLUDE (CODE) ASYNC " + this.indexDDLOptions, indexTableName, dataTableFullName));
             // Run the index MR job to only verify that each data table row has a corresponding index row
             // IndexTool will go through each data table row and record the mismatches in the output table
             // called PHOENIX_INDEX_TOOL
@@ -668,7 +723,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
             conn.createStatement().execute("CREATE TABLE " + dataTableFullName
                     + " (ID INTEGER NOT NULL PRIMARY KEY, NAME VARCHAR, CODE VARCHAR) "+tableDDLOptions);
             conn.createStatement().execute(String.format(
-                    "CREATE INDEX %s ON %s (NAME) INCLUDE (CODE)", indexTableName, dataTableFullName));
+                    "CREATE INDEX %s ON %s (NAME) INCLUDE (CODE) " + this.indexDDLOptions, indexTableName, dataTableFullName));
 
             conn.createStatement().execute("upsert into " + dataTableFullName + " values (1, 'Phoenix', 'A')");
             conn.createStatement().execute("upsert into " + dataTableFullName + " values (2, 'Phoenix1', 'B')");
@@ -743,10 +798,10 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
             conn.createStatement().execute("CREATE VIEW "+viewFullName+" AS SELECT * FROM "+dataTableFullName);
 
             conn.createStatement().execute(String.format(
-                    "CREATE INDEX "+viewIndexName+" ON "+viewFullName+" (val3) INCLUDE(val5)"));
+                    "CREATE INDEX "+viewIndexName+" ON "+viewFullName+" (val3) INCLUDE(val5) " + this.indexDDLOptions));
 
             conn.createStatement().execute(String.format(
-                    "CREATE INDEX "+indexTableName+" ON "+dataTableFullName+" (val3) INCLUDE(val5)"));
+                    "CREATE INDEX "+indexTableName+" ON "+dataTableFullName+" (val3) INCLUDE(val5) " + this.indexDDLOptions));
 
             customEdge.setValue(EnvironmentEdgeManager.currentTimeMillis());
             EnvironmentEdgeManager.injectEdge(customEdge);
@@ -873,7 +928,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
                     "CREATE VIEW " + viewFullName + " AS SELECT * FROM " + dataTableFullName + " WHERE val6 = 'def'");
             conn.createStatement().execute(String.format(
                     "CREATE INDEX " + viewIndexName + " ON " + viewFullName
-                            + " (val3) INCLUDE(val5)"));
+                            + " (val3) INCLUDE(val5) " + this.indexDDLOptions));
             customeEdge.setValue(EnvironmentEdgeManager.currentTimeMillis());
             EnvironmentEdgeManager.injectEdge(customeEdge);
 
@@ -992,7 +1047,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
             //create ASYNC
             String stmtString2 =
                 String.format(
-                    "CREATE INDEX %s ON %s (LPAD(UPPER(NAME, 'en_US'),8,'x')||'_xyz') ASYNC ",
+                    "CREATE INDEX %s ON %s (LPAD(UPPER(NAME, 'en_US'),8,'x')||'_xyz') ASYNC " + this.indexDDLOptions,
                     indexTableName, dataTableFullName);
             conn.createStatement().execute(stmtString2);
             conn.commit();
@@ -1090,7 +1145,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
 
             String stmtString2 =
                 String.format(
-                    "CREATE INDEX %s ON %s (LPAD(UPPER(NAME, 'en_US'),8,'x')||'_xyz') ASYNC ",
+                    "CREATE INDEX %s ON %s (LPAD(UPPER(NAME, 'en_US'),8,'x')||'_xyz') ASYNC " + this.indexDDLOptions,
                     indexTableName, dataTableFullName);
             conn.createStatement().execute(stmtString2);
             conn.commit();
@@ -1148,7 +1203,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
 
             String stmtString2 =
                     String.format(
-                            "CREATE INDEX %s ON %s (NAME) INCLUDE (ZIP) ASYNC ", indexTableName, dataTableFullName);
+                            "CREATE INDEX %s ON %s (NAME) INCLUDE (ZIP) ASYNC " + this.indexDDLOptions, indexTableName, dataTableFullName);
             conn.createStatement().execute(stmtString2);
 
             // Run the index MR job and verify that the index table is built correctly
@@ -1186,7 +1241,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
             conn.createStatement().execute("DELETE FROM " + fullDataTableName + " WHERE k = 'b'");
             conn.createStatement().execute("DELETE FROM " + fullDataTableName + " WHERE k = 'c'");
             conn.commit();
-            conn.createStatement().execute(String.format("CREATE INDEX %s ON %s (v) ASYNC",
+            conn.createStatement().execute(String.format("CREATE INDEX %s ON %s (v) ASYNC " + this.indexDDLOptions,
                 indexTableName, fullDataTableName));
             // Run the index MR job and verify that the index table is built correctly
             Configuration conf = new Configuration(getUtility().getConfiguration());
@@ -1240,7 +1295,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
             conn.createStatement().execute("UPSERT INTO " + fullDataTableName + " VALUES('b','bbb')");
             conn.createStatement().execute("DELETE FROM " + fullDataTableName + " WHERE k = 'c'");
             conn.commit();
-            conn.createStatement().execute(String.format("CREATE INDEX %s ON %s (v) ASYNC",
+            conn.createStatement().execute(String.format("CREATE INDEX %s ON %s (v) ASYNC " + this.indexDDLOptions,
                 indexTableName, fullDataTableName));
             // Run the index MR job and verify that the index table is built correctly
             Configuration conf = new Configuration(getUtility().getConfiguration());
@@ -1336,7 +1391,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
 
             String createViewIndex =
                     "CREATE INDEX IF NOT EXISTS " + indexTableName + " ON " + view1FullName
-                            + " (VIEW_COLB) ASYNC";
+                            + " (VIEW_COLB) ASYNC " + this.indexDDLOptions;
             conn.createStatement().execute(createViewIndex);
             conn.commit();
             // Rebuild using index tool
@@ -1415,7 +1470,7 @@ public class IndexToolForNonTxGlobalIndexIT extends BaseUniqueNamesOwnClusterIT 
 
             String createViewIndex =
                     "CREATE INDEX IF NOT EXISTS " + indexTableName + " ON " + view1FullName
-                            + " (VIEW_COLB) ASYNC";
+                            + " (VIEW_COLB) ASYNC " + this.indexDDLOptions;
             conn.createStatement().execute(createViewIndex);
             conn.commit();
             // Rebuild using index tool

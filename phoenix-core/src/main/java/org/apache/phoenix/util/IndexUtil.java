@@ -39,6 +39,15 @@ import java.util.ListIterator;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.hadoop.hbase.ArrayBackedTag;
+import org.apache.hadoop.hbase.CellScanner;
+import org.apache.hadoop.hbase.PhoenixTagType;
+import org.apache.hadoop.hbase.PrivateCellUtil;
+import org.apache.hadoop.hbase.RawCell;
+import org.apache.hadoop.hbase.Tag;
+import org.apache.hadoop.hbase.client.Delete;
+import org.apache.hadoop.hbase.regionserver.MiniBatchOperationInProgress;
+import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.thirdparty.com.google.common.cache.Cache;
 import org.apache.phoenix.thirdparty.com.google.common.cache.CacheBuilder;
 import org.apache.hadoop.hbase.Cell;
@@ -85,6 +94,7 @@ import org.apache.phoenix.expression.KeyValueColumnExpression;
 import org.apache.phoenix.expression.RowKeyColumnExpression;
 import org.apache.phoenix.expression.SingleCellColumnExpression;
 import org.apache.phoenix.expression.visitor.RowKeyExpressionVisitor;
+import org.apache.phoenix.hbase.index.AbstractValueGetter;
 import org.apache.phoenix.hbase.index.ValueGetter;
 import org.apache.phoenix.hbase.index.covered.update.ColumnReference;
 import org.apache.phoenix.hbase.index.util.ImmutableBytesPtr;
@@ -339,7 +349,7 @@ public class IndexUtil {
                  * updating an existing row.
                  */
                 if (dataMutation instanceof Put) {
-                    ValueGetter valueGetter = new ValueGetter() {
+                    ValueGetter valueGetter = new AbstractValueGetter() {
 
                         @Override
                         public byte[] getRowKey() {
@@ -762,7 +772,9 @@ public class IndexUtil {
                 (table.isTransactional() && table.getTransactionProvider().getTransactionProvider().isUnsupported(Feature.MAINTAIN_LOCAL_INDEX_ON_SERVER)) ?
                          IndexMaintainer.maintainedIndexes(table.getIndexes().iterator()) :
                              (table.isImmutableRows() || table.isTransactional()) ?
-                                IndexMaintainer.maintainedGlobalIndexes(table.getIndexes().iterator()) :
+                                 // If the data table has a different storage scheme than index table, don't maintain this on the client
+                                 // For example, if the index is single cell but the data table is one_cell, if there is a partial update on the data table, index can't be built on the client.
+                                IndexMaintainer.maintainedGlobalIndexesWithMatchingStorageScheme(table, table.getIndexes().iterator()) :
                                     Collections.<PTable>emptyIterator();
         return Lists.newArrayList(indexIterator);
     }
@@ -793,6 +805,73 @@ public class IndexUtil {
             return Bytes.toLong(result.getValue(TABLE_FAMILY_BYTES, PhoenixDatabaseMetaData.PENDING_DISABLE_COUNT_BYTES));
         } catch (SQLException e) {
             throw new IOException(e);
+        }
+    }
+
+    public static long getIndexPendingDisableCountLastUpdatedTimestamp(
+            PhoenixConnection conn, String failedIndexTable)
+            throws IOException {
+        byte[] indexTableKey =
+            SchemaUtil.getTableKeyFromFullName(failedIndexTable);
+        Get get = new Get(indexTableKey);
+        get.addColumn(TABLE_FAMILY_BYTES,
+            PhoenixDatabaseMetaData.PENDING_DISABLE_COUNT_BYTES);
+        byte[] systemCatalog = SchemaUtil.getPhysicalTableName(
+            PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME,
+            conn.getQueryServices().getProps()).getName();
+        try (Table table = conn.getQueryServices().getTable(systemCatalog)) {
+            Result result = table.get(get);
+            Cell cell = result.listCells().get(0);
+            return cell.getTimestamp();
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
+    }
+
+    /**
+     * Set Cell Tags to delete markers with source of operation attribute.
+     * @param miniBatchOp miniBatchOp
+     * @throws IOException IOException
+     */
+    public static void setDeleteAttributes(
+            MiniBatchOperationInProgress<Mutation> miniBatchOp)
+            throws IOException {
+        for (int i = 0; i < miniBatchOp.size(); i++) {
+            Mutation m = miniBatchOp.getOperation(i);
+            if (!(m instanceof Delete)) {
+                // Ignore if it is not Delete type.
+                continue;
+            }
+            byte[] sourceOpAttr =
+                    m.getAttribute(QueryServices.SOURCE_OPERATION_ATTRIB);
+            if (sourceOpAttr == null) {
+                continue;
+            }
+            Tag sourceOpTag = new ArrayBackedTag(
+                    PhoenixTagType.SOURCE_OPERATION_TAG_TYPE, sourceOpAttr);
+            List<Cell> updatedCells = new ArrayList<>();
+            for (CellScanner cellScanner = m.cellScanner();
+                 cellScanner.advance();) {
+                Cell cell = cellScanner.current();
+                RawCell rawCell = (RawCell) cell;
+                List<Tag> tags = new ArrayList<>();
+                Iterator<Tag> tagsIterator = rawCell.getTags();
+                while (tagsIterator.hasNext()) {
+                    tags.add(tagsIterator.next());
+                }
+                tags.add(sourceOpTag);
+                // TODO: PrivateCellUtil's IA is Private.
+                // HBASE-25328 adds a builder methodfor creating Tag which
+                // will be LP with IA.coproc
+                Cell updatedCell = PrivateCellUtil.createCell(cell, tags);
+                updatedCells.add(updatedCell);
+            }
+            m.getFamilyCellMap().clear();
+            // Clear and add new Cells to the Mutation.
+            for (Cell cell : updatedCells) {
+                Delete d = (Delete) m;
+                d.addDeleteMarker(cell);
+            }
         }
     }
 }

@@ -98,6 +98,7 @@ import org.apache.phoenix.thirdparty.com.google.common.base.Preconditions;
 import org.apache.phoenix.thirdparty.com.google.common.collect.Iterables;
 import org.apache.phoenix.thirdparty.com.google.common.collect.Lists;
 import org.apache.phoenix.thirdparty.com.google.common.collect.Maps;
+import org.apache.phoenix.thirdparty.com.google.common.base.Strings;
 
 /**
  * 
@@ -140,8 +141,9 @@ public class SchemaUtil {
         
     };
     public static final RowKeySchema VAR_BINARY_SCHEMA = new RowKeySchemaBuilder(1).addField(VAR_BINARY_DATUM, false, SortOrder.getDefault()).build();
-    public static final String SCHEMA_FOR_DEFAULT_NAMESPACE = "DEFAULT";
-    public static final String HBASE_NAMESPACE = "HBASE";
+    // See PHOENIX-4424
+    public static final String SCHEMA_FOR_DEFAULT_NAMESPACE = "default";
+    public static final String HBASE_NAMESPACE = "hbase";
     public static final List<String> NOT_ALLOWED_SCHEMA_LIST = Arrays.asList(SCHEMA_FOR_DEFAULT_NAMESPACE,
             HBASE_NAMESPACE);
     
@@ -199,7 +201,8 @@ public class SchemaUtil {
 
     /**
      * Normalize an identifier. If name is surrounded by double quotes,
-     * it is used as-is, otherwise the name is upper caased.
+     * the double quotes are stripped and the rest is used as-is,
+     * otherwise the name is upper caased.
      * @param name the parsed identifier
      * @return the normalized identifier
      */
@@ -322,6 +325,10 @@ public class SchemaUtil {
                 SEPARATOR_BYTE_ARRAY, Bytes.toBytes(tableName),
                 SEPARATOR_BYTE_ARRAY, Bytes.toBytes(columnName),
                 SEPARATOR_BYTE_ARRAY, Bytes.toBytes(familyName));
+    }
+
+    public static PName getTableName(PName schemaName, PName tableName) {
+        return PNameFactory.newName(getName(schemaName==null? null : schemaName.getString(), tableName.getString(), false));
     }
 
     public static String getTableName(String schemaName, String tableName) {
@@ -666,7 +673,7 @@ public class SchemaUtil {
         if (schemaName == null || schemaName.length() == 0) {
             return "\"" + tableName + "\"";
         }
-        return "\"" + schemaName + "\"." + "\"" + tableName + "\"";
+        return "\"" + schemaName + "\"" + QueryConstants.NAME_SEPARATOR + "\"" + tableName + "\"";
     }
 
     protected static PhoenixConnection addMetaDataColumn(PhoenixConnection conn, long scn, String columnDef) throws SQLException {
@@ -702,9 +709,12 @@ public class SchemaUtil {
     }
 
     public static String getSchemaNameFromFullName(String tableName) {
-        if (isExistingTableMappedToPhoenixName(tableName)) { return StringUtil.EMPTY_STRING; }
-        if (tableName.contains(QueryConstants.NAMESPACE_SEPARATOR)) { return getSchemaNameFromFullName(tableName,
-                QueryConstants.NAMESPACE_SEPARATOR); }
+        if (isExistingTableMappedToPhoenixName(tableName)) {
+            return StringUtil.EMPTY_STRING;
+        }
+        if (tableName.contains(QueryConstants.NAMESPACE_SEPARATOR)) {
+            return getSchemaNameFromFullName(tableName, QueryConstants.NAMESPACE_SEPARATOR);
+        }
         return getSchemaNameFromFullName(tableName, QueryConstants.NAME_SEPARATOR);
     }
 
@@ -1163,6 +1173,21 @@ public class SchemaUtil {
     }
 
     /**
+     * Calculate the Phoenix Table name without normalization
+     *
+     * @param schemaName import schema name, can be null
+     * @param tableName import table name
+     * @return the qualified Phoenix table name, from the non normalized schema and table
+     */
+    public static String getQualifiedPhoenixTableName(String schemaName, String tableName) {
+        if (schemaName != null && !schemaName.isEmpty()) {
+            return String.format("%s.%s", schemaName, tableName);
+        } else {
+            return tableName;
+        }
+    }
+
+    /**
      * Pads the data in ptr by the required amount for fixed width data types
      */
     public static void padData(String tableName, PColumn column, ImmutableBytesWritable ptr) {
@@ -1214,11 +1239,51 @@ public class SchemaUtil {
     }
 
 
+    /**
+     * This function is needed so that SchemaExtractionTool returns a valid DDL with correct
+     * table/schema name that can be parsed
+     *
+     * @param pSchemaName
+     * @param pTableName
+     * @return quoted string if schema or table name has non-alphabetic characters in it.
+     */
     public static String getPTableFullNameWithQuotes(String pSchemaName, String pTableName) {
         String pTableFullName = getQualifiedTableName(pSchemaName, pTableName);
-        if(!(Character.isAlphabetic(pTableName.charAt(0)))) {
-            pTableFullName = pSchemaName+".\""+pTableName+"\"";
+        boolean tableNameNeedsQuotes = isQuotesNeeded(pTableName);
+        boolean schemaNameNeedsQuotes = isQuotesNeeded(pSchemaName);
+
+        if(schemaNameNeedsQuotes) {
+            pSchemaName= "\""+pSchemaName+"\"";
+        }
+        if(tableNameNeedsQuotes) {
+            pTableName = "\""+pTableName+"\"";
+        }
+        if(tableNameNeedsQuotes || schemaNameNeedsQuotes) {
+            if (!Strings.isNullOrEmpty(pSchemaName)) {
+                return String.format("%s.%s", pSchemaName, pTableName);
+            } else {
+                return pTableName;
+            }
         }
         return pTableFullName;
+    }
+
+    private static boolean isQuotesNeeded(String name) {
+        // first char numeric or non-underscore
+        if (Strings.isNullOrEmpty(name)) {
+            return false;
+        }
+        if (!Character.isAlphabetic(name.charAt(0)) && name.charAt(0)!='_') {
+            return true;
+        }
+        // for all other chars
+        // ex. name like z@@ will need quotes whereas t0001 will not need quotes
+        for (int i=1; i<name.toCharArray().length; i++) {
+            char charAtI = name.charAt(i);
+            if (!(Character.isAlphabetic(charAtI)) && !Character.isDigit(charAtI) && charAtI != '_') {
+                return true;
+            }
+        }
+        return false;
     }
 }

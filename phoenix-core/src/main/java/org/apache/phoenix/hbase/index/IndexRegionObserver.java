@@ -30,14 +30,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.apache.hadoop.hbase.ArrayBackedTag;
-import org.apache.hadoop.hbase.CellScanner;
-import org.apache.hadoop.hbase.PhoenixTagType;
-import org.apache.hadoop.hbase.PrivateCellUtil;
-import org.apache.hadoop.hbase.RawCell;
-import org.apache.hadoop.hbase.Tag;
-import org.apache.hadoop.hbase.TagUtil;
-import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.thirdparty.com.google.common.collect.ArrayListMultimap;
 import org.apache.phoenix.thirdparty.com.google.common.collect.ListMultimap;
 import org.apache.phoenix.thirdparty.com.google.common.collect.Lists;
@@ -101,6 +93,7 @@ import org.apache.phoenix.schema.types.PVarbinary;
 import org.apache.phoenix.trace.TracingUtils;
 import org.apache.phoenix.trace.util.NullSpan;
 import org.apache.phoenix.util.EnvironmentEdgeManager;
+import org.apache.phoenix.util.IndexUtil;
 import org.apache.phoenix.util.SchemaUtil;
 import org.apache.phoenix.util.ServerUtil;
 import org.apache.phoenix.util.ServerUtil.ConnectionType;
@@ -733,7 +726,7 @@ public class IndexRegionObserver extends CompatIndexRegionObserver implements Re
         scan.setFilter(skipScanFilter);
         try (RegionScanner scanner = c.getEnvironment().getRegion().getScanner(scan)) {
             boolean more = true;
-            while(more) {
+            while (more) {
                 List<Cell> cells = new ArrayList<Cell>();
                 more = scanner.next(cells);
                 if (cells.isEmpty()) {
@@ -782,7 +775,7 @@ public class IndexRegionObserver extends CompatIndexRegionObserver implements Re
                     if (indexPut == null) {
                         // No covered column. Just prepare an index row with the empty column
                         byte[] indexRowKey = indexMaintainer.buildRowKey(nextDataRowVG, rowKeyPtr,
-                                null, null, HConstants.LATEST_TIMESTAMP);
+                                null, null, ts);
                         indexPut = new Put(indexRowKey);
                     } else {
                         removeEmptyColumn(indexPut, indexMaintainer.getEmptyKeyValueFamily().copyBytesIfNecessary(),
@@ -796,7 +789,7 @@ public class IndexRegionObserver extends CompatIndexRegionObserver implements Re
                     if (currentDataRowState != null) {
                         ValueGetter currentDataRowVG = new GlobalIndexRegionScanner.SimpleValueGetter(currentDataRowState);
                         byte[] indexRowKeyForCurrentDataRow = indexMaintainer.buildRowKey(currentDataRowVG, rowKeyPtr,
-                                null, null, HConstants.LATEST_TIMESTAMP);
+                                null, null, ts);
                         if (Bytes.compareTo(indexPut.getRow(), indexRowKeyForCurrentDataRow) != 0) {
                             Mutation del = indexMaintainer.buildRowDeleteMutation(indexRowKeyForCurrentDataRow,
                                     IndexMaintainer.DeleteType.ALL_VERSIONS, ts);
@@ -807,7 +800,7 @@ public class IndexRegionObserver extends CompatIndexRegionObserver implements Re
                 } else if (currentDataRowState != null) {
                     ValueGetter currentDataRowVG = new GlobalIndexRegionScanner.SimpleValueGetter(currentDataRowState);
                     byte[] indexRowKeyForCurrentDataRow = indexMaintainer.buildRowKey(currentDataRowVG, rowKeyPtr,
-                            null, null, HConstants.LATEST_TIMESTAMP);
+                            null, null, ts);
                     Mutation del = indexMaintainer.buildRowDeleteMutation(indexRowKeyForCurrentDataRow,
                             IndexMaintainer.DeleteType.ALL_VERSIONS, ts);
                     context.indexUpdates.put(hTableInterfaceReference,
@@ -974,7 +967,7 @@ public class IndexRegionObserver extends CompatIndexRegionObserver implements Re
         context.populateOriginalMutations(miniBatchOp);
         // Need to add cell tags to Delete Marker before we do any index processing
         // since we add tags to tables which doesn't have indexes also.
-        setDeleteAttributes(miniBatchOp);
+        IndexUtil.setDeleteAttributes(miniBatchOp);
 
         /*
          * Exclusively lock all rows so we get a consistent read
@@ -1028,49 +1021,6 @@ public class IndexRegionObserver extends CompatIndexRegionObserver implements Re
         }
         if (failDataTableUpdatesForTesting) {
             throw new DoNotRetryIOException("Simulating the data table write failure");
-        }
-    }
-
-    /**
-     * Set Cell Tags to delete markers with source of operation attribute.
-     * @param miniBatchOp
-     * @throws IOException
-     */
-    private void setDeleteAttributes(MiniBatchOperationInProgress<Mutation> miniBatchOp)
-            throws IOException {
-        for (int i = 0; i < miniBatchOp.size(); i++) {
-            Mutation m = miniBatchOp.getOperation(i);
-            if (!(m instanceof  Delete)) {
-                // Ignore if it is not Delete type.
-                continue;
-            }
-            byte[] sourceOpAttr = m.getAttribute(QueryServices.SOURCE_OPERATION_ATTRIB);
-            if (sourceOpAttr == null) {
-                continue;
-            }
-            Tag sourceOpTag = new ArrayBackedTag(PhoenixTagType.SOURCE_OPERATION_TAG_TYPE,
-                    sourceOpAttr);
-            List<Cell> updatedCells = new ArrayList<>();
-            for (CellScanner cellScanner = m.cellScanner(); cellScanner.advance();) {
-                Cell cell = cellScanner.current();
-                RawCell rawCell = (RawCell)cell;
-                List<Tag> tags = new ArrayList<>();
-                Iterator<Tag> tagsIterator = rawCell.getTags();
-                while (tagsIterator.hasNext()) {
-                    tags.add(tagsIterator.next());
-                }
-                tags.add(sourceOpTag);
-                // TODO: PrivateCellUtil's IA is Private. HBASE-25328 adds a builder method
-                // TODO: for creating Tag which will be LP with IA.coproc
-                Cell updatedCell = PrivateCellUtil.createCell(cell, tags);
-                updatedCells.add(updatedCell);
-            }
-            m.getFamilyCellMap().clear();
-            // Clear and add new Cells to the Mutation.
-            for (Cell cell : updatedCells) {
-                Delete d = (Delete) m;
-                d.addDeleteMarker(cell);
-            }
         }
     }
 

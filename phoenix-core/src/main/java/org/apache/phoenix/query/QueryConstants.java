@@ -103,6 +103,7 @@ import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.ORDINAL_POSITION;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.PHOENIX_TTL;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.PHOENIX_TTL_HWM;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.PHYSICAL_NAME;
+import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.PHYSICAL_TABLE_NAME;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.PK_NAME;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.QUERY;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.QUERY_ID;
@@ -112,6 +113,7 @@ import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.REMARKS;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.RETURN_TYPE;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SALT_BUCKETS;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SCAN_METRICS_JSON;
+import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SCHEMA_VERSION;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SCOPE_CATALOG;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SCOPE_SCHEMA;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SCOPE_TABLE;
@@ -182,7 +184,6 @@ public interface QueryConstants {
     enum JoinType {INNER, LEFT_OUTER}
     String SYSTEM_SCHEMA_NAME = "SYSTEM";
     byte[] SYSTEM_SCHEMA_NAME_BYTES = Bytes.toBytes(SYSTEM_SCHEMA_NAME);
-    String HBASE_DEFAULT_SCHEMA_NAME = "default";
     String OFFSET_ROW_KEY = "_OFFSET_";
     byte[] OFFSET_ROW_KEY_BYTES = Bytes.toBytes(OFFSET_ROW_KEY);
     ImmutableBytesPtr OFFSET_ROW_KEY_PTR = new ImmutableBytesPtr(OFFSET_ROW_KEY_BYTES);
@@ -311,8 +312,9 @@ public interface QueryConstants {
             VIEW_INDEX_ID_DATA_TYPE + " INTEGER,\n" +
             PHOENIX_TTL + " BIGINT,\n" +
             PHOENIX_TTL_HWM + " BIGINT,\n" +
-            LAST_DDL_TIMESTAMP + " BIGINT, " +
-            CHANGE_DETECTION_ENABLED + " BOOLEAN, " +
+            LAST_DDL_TIMESTAMP + " BIGINT, \n" +
+            CHANGE_DETECTION_ENABLED + " BOOLEAN, \n" +
+            SCHEMA_VERSION + " VARCHAR, \n" +
             // Column metadata (will be null for table row)
             DATA_TYPE + " INTEGER," +
             COLUMN_SIZE + " INTEGER," +
@@ -361,6 +363,7 @@ public interface QueryConstants {
             COLUMN_QUALIFIER_COUNTER + " INTEGER, " +
             USE_STATS_FOR_PARALLELIZATION + " BOOLEAN, " +
             TRANSACTION_PROVIDER + " TINYINT, " +
+            PHYSICAL_TABLE_NAME + " VARCHAR," +
             "CONSTRAINT " + SYSTEM_TABLE_PK_NAME + " PRIMARY KEY (" + TENANT_ID + ","
             + TABLE_SCHEM + "," + TABLE_NAME + "," + COLUMN_NAME + "," + COLUMN_FAMILY + "))\n" +
             HConstants.VERSIONS + "=%s,\n" +
